@@ -1,3 +1,8 @@
+/*
+	Stepper motor driver for Arduino Uno
+	Tomasz Jaworski, 2018
+*/
+
 #include "digitalWriteFast.h"
 
 #define LED				13
@@ -47,7 +52,7 @@ void loop() {
   
 
 
-	while(1)
+	while(0)
 	{
 		bool left = digitalReadFast(LEFT);
 		bool right = digitalReadFast(RIGHT);
