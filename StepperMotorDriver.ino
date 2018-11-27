@@ -273,12 +273,15 @@ void setup() {
 
 void loop() {
 
+
+	String s = "";
+	String old_command = "";
 	
 	while(1)
 	{
 		Serial.print("> ");
+		s = "";
 
-		String s = "";
 		while(true)
 		{
 			while(Serial.available() == 0);
@@ -290,18 +293,31 @@ void loop() {
 		
 		s.trim();
 		s.toLowerCase();
+		
+		// repeat last command if current is empty
+		if (s == "")
+			s = old_command;
+		else
+			old_command = s;
+		
 		Serial.println(s);
 
 		
 		if (s == "help")
 		{
 			Serial.println(F("Available commands:"));
-			Serial.println(F("  reset     - reset the controller"));
-			Serial.println(F("  switches  - test limit switches only"));
-			Serial.println(F("  enable    - enables power output"));
-			Serial.println(F("  disable   - disables power output"));
+			Serial.println(F("  reset      - reset the controller"));
+			Serial.println(F("  switches   - test limit switches only"));
 
-		
+			Serial.println(F("  enable/en  - enables power output"));
+			Serial.println(F("  disable/di - disables power output"));
+
+			Serial.println(F("  forward/f  - set forward direction (incremental)"));
+			Serial.println(F("  backward/b - set backward direction (decremental)"));
+			Serial.println(F("  step/s     - make a step in set direction"));
+			
+			
+
 			continue;
 		}
 		
@@ -320,14 +336,31 @@ void loop() {
 		
 		if (s == "enable" || s == "en") {
 			MOTOR_ENABLE(true);
+			Serial.println("Power enabled");
 			continue;
 		}
 
 		if (s == "disable" || s == "di") {
 			MOTOR_ENABLE(false);
+			Serial.println("Power disabled");
 			continue;
 		}
 
+		if (s == "forward" || s == "f") {
+			MOTOR_SET_DIRECTION(+1);
+			continue;
+		}
+
+		if (s == "backward" || s == "b") {
+			MOTOR_SET_DIRECTION(-1);
+			continue;
+		}
+
+		if (s == "step" || s == "s") {
+			MOTOR_PULSE;
+			continue;
+		}
+		
 		
 		Serial.print(F(" Command '"));
 		Serial.print(s);
