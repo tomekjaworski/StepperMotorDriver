@@ -4,24 +4,33 @@
 */
 
 #include "digitalWriteFast.h"
+#include <avr/wdt.h>
 
-#define LED				13
+#define LED						13
 
 #define PIN_MOTOR_ENABLE		2
 #define PIN_MOTOR_DIRECTION		3
 #define PIN_MOTOR_PULSE			4
 
-#define LEFT				7
-#define RIGHT				8
+#define PIN_LIMIT_LEFT			7
+#define PIN_LIMIT_RIGHT			8
 
 
-#define min(__a, __b) ((__a) < (__b) ? (__a) : (__b))
-#define abs(__a) ((__a) < 0 ? -(__a) : (__a))
 
 enum class MotorDirection {
 	Forward,
 	Backward
 };
+
+
+struct {
+	int start_delay;
+	int stop_delay;
+	int step_delay;
+	int n_delay_steps;
+	int divider;
+} config;
+
 
 struct {
   long current;
@@ -45,42 +54,50 @@ struct {
 
 
 #if defined(Arduino_h)
+	bool __pulse_state = 0;
 
-  bool __pulse_state = 0;
-  #define DEBUG(...)
-  #define MOTOR_SET_DIRECTION(__x)									\
-		do {														\
-			if ((__x) == 1) {										\
-				position.direction = MotorDirection::Forward;		\
-				digitalWriteFast(PIN_MOTOR_DIRECTION, true)			\
-				digitalWriteFast(LED, true);						\
-			}														\
-			else {													\
-				position.direction = MotorDirection::Backward;		\
-				digitalWriteFast(PIN_MOTOR_DIRECTION, false);		\
-				digitalWriteFast(LED, false);						\
-			}														\
+	#define DEBUG(...)
+	#define MOTOR_SET_DIRECTION(__x)							\
+		do {													\
+			if ((__x) == 1) {									\
+				position.direction = MotorDirection::Forward;	\
+				digitalWriteFast(PIN_MOTOR_DIRECTION, true)		\
+				digitalWriteFast(LED, true);					\
+			}													\
+			else {												\
+				position.direction = MotorDirection::Backward;	\
+				digitalWriteFast(PIN_MOTOR_DIRECTION, false);	\
+				digitalWriteFast(LED, false);					\
+			}													\
 		} while(0);
 			
 // -------------------------
 			
-  #define MOTOR_PULSE												\
-		do {														\
-	  		if (__pulse_state = !__pulse_state)						\
-			{														\
-				digitalWriteFast(PIN_MOTOR_PULSE, true);			\
-			} else {												\
-				digitalWriteFast(PIN_MOTOR_PULSE, false);			\
-			}														\
+	#define MOTOR_PULSE											\
+		do {													\
+	  		if (__pulse_state = !__pulse_state)					\
+			{													\
+				digitalWriteFast(PIN_MOTOR_PULSE, true);		\
+			} else {											\
+				digitalWriteFast(PIN_MOTOR_PULSE, false);		\
+			}													\
 		} while (0);
+	
+	#define MOTOR_ENABLE(__const_value)							\
+		do {													\
+			digitalWriteFast(PIN_MOTOR_ENABLE, !__const_value)	\
+		} while (0);											\
+
+		
 		
 #else
-  // test code
-  long __step = 0;
-  #define MOTOR_SET_DIRECTION(__x) do { __step = __x; } while(0)
-  #define MOTOR_PULSE position.current += __step;
+	// test code
+	long __step = 0;
+	#define MOTOR_SET_DIRECTION(__x) do { __step = __x; } while(0)
+	#define MOTOR_PULSE position.current += __step;
+	#define MOTOR_ENABLE(__const_value)
 
-  #define DEBUG(...) printf(__VA_ARGS__)
+	#define DEBUG(...) printf(__VA_ARGS__)
 #endif
 
 
@@ -139,34 +156,6 @@ void do_deccelerate(void)
 }
 
 
-void setup() {
-	// put your setup code here, to run once:
-	Serial.begin(9600);
-	Serial.println("Sterownik silnika krokowego");
-
-	pinModeFast(LED, OUTPUT);
-
-	pinModeFast(PIN_MOTOR_ENABLE, OUTPUT);
-	pinModeFast(PIN_MOTOR_DIRECTION, OUTPUT);
-	pinModeFast(PIN_MOTOR_PULSE, OUTPUT);
-
-	pinModeFast(LEFT, INPUT);
-	pinModeFast(RIGHT, INPUT);
-}
-
-//int start_delay = 16000;
-//int stop_delay = 1000;
-//int step_delay = 2;
-//int nsteps = (start_delay - stop_delay) / step_delay;
-
-
-struct {
-	int start_delay;
-	int stop_delay;
-	int step_delay;
-	int n_delay_steps;
-} config;
-
 void do_goto(long target)
 {
 	task.target = target;
@@ -202,32 +191,155 @@ void do_goto(long target)
 }
 
 
+void cmd_test_limit_switches(void)
+{
+	char buffer[] = {'\n', 'L', '-','R','-','\x0'}; // 2, 4
+	
+	while (Serial.available() == 0)
+	{
+		buffer[2] = '0' + !!digitalReadFast(PIN_LIMIT_LEFT);
+		buffer[4] = '0' + !!digitalReadFast(PIN_LIMIT_RIGHT);
+		
+		Serial.print(buffer);
+	}
+	
+	while (Serial.available())
+		Serial.read();	
+}
 
-void loop() {
-	// put your main code here, to run repeatedly:
+void setup() {
+	wdt_disable();
+	Serial.begin(9600);
+	pinModeFast(LED, OUTPUT);
 
-	digitalWriteFast(PIN_MOTOR_ENABLE, false);
-	digitalWriteFast(PIN_MOTOR_DIRECTION, true);
+
+	// setup driver pins
+	pinModeFast(PIN_MOTOR_ENABLE, OUTPUT);
+	pinModeFast(PIN_MOTOR_DIRECTION, OUTPUT);
+	pinModeFast(PIN_MOTOR_PULSE, OUTPUT);
+
+	digitalWriteFast(PIN_MOTOR_ENABLE, true);
+	digitalWriteFast(PIN_MOTOR_DIRECTION, false);
 	digitalWriteFast(PIN_MOTOR_PULSE, false);
+	
+	// setup inputs for limit switches
+	pinModeFast(PIN_LIMIT_LEFT, INPUT);
+	pinModeFast(PIN_LIMIT_RIGHT, INPUT);
 
+	MOTOR_SET_DIRECTION(1);
+	MOTOR_ENABLE(false);
+	
 
-	// konfiguracja
-	config.start_delay = 1600;
-	config.stop_delay = 250;
-	config.step_delay = 4;
+	// basic motro parameters setup
+	config.start_delay = 1600;	// Interval [us] between steps at ZERO velocity
+	config.stop_delay = 250;	// Interval [us] between steps at TOP velocity
+	config.step_delay = 4;		// Acceleration/decceleration interval
+								// Amount of time [us] that is added or subtracted from common step interval during ramp execution
+								// This parameter can be also interpreted as the slope of the velocity ramp
+	
+	config.divider = 1;			// Step divider set with the Driver's Switches
+								// 1	=	1/1
+								// 2	=	1/2
+								// 4	=	1/4
+								// 8	=	1/8
+								// 16	=	1/16
+
 	config.n_delay_steps = (config.start_delay - config.stop_delay) / config.step_delay;
 
-	// warunki początkowe
+	// initial conditions
 	position.current = 0;
 	position.delay = config.start_delay;
+	
+	
+	
+	// I'm alive!
+	delay(1000);
+	for (int i = 0; i < 10; i++)
+	{
+		Serial.print((char)(43+2*(i&1)));
+		delay(200);
+	}
+	
+	Serial.println();
+	Serial.println(F("================================================================================="));
+	Serial.println(F("# Stepper motor controller (motor 57HS22-A, driver HY-DIV-268N-5A               #"));
+	Serial.println(F("# v1.0 Tomasz Jaworski, 2018                                                    #"));
+	Serial.println(F("================================================================================="));
+	Serial.println(F("Commands should end only with the '\\n' character."));
+	Serial.println(F("ARDUINO IDE: Change 'No line ending' to 'Newline' in the bottom part of your console"));
+}
 
+
+
+void loop() {
+
+	
+	while(1)
+	{
+		Serial.print("> ");
+
+		String s = "";
+		while(true)
+		{
+			while(Serial.available() == 0);
+			int ch = Serial.read();
+			if (ch == '\n')
+				break;
+			s += (char)ch;
+		}
+		
+		s.trim();
+		s.toLowerCase();
+		Serial.println(s);
+
+		
+		if (s == "help")
+		{
+			Serial.println(F("Available commands:"));
+			Serial.println(F("  reset     - reset the controller"));
+			Serial.println(F("  switches  - test limit switches only"));
+			Serial.println(F("  enable    - enables power output"));
+			Serial.println(F("  disable   - disables power output"));
+
+		
+			continue;
+		}
+		
+		
+		if (s == "reset") {
+			Serial.println("Resetting...");
+			delay(1000);
+			wdt_enable(WDTO_15MS);
+			while(1);
+		}
+		
+		if (s == "switches") {
+			cmd_test_limit_switches();
+			continue;
+		}
+		
+		if (s == "enable" || s == "en") {
+			MOTOR_ENABLE(true);
+			continue;
+		}
+
+		if (s == "disable" || s == "di") {
+			MOTOR_ENABLE(false);
+			continue;
+		}
+
+		
+		Serial.print(F(" Command '"));
+		Serial.print(s);
+		Serial.print(F("' unknown; Maybe 'help'?\n"));
+	}
 
 	
 
 	while(0)
 	{
-		bool left = digitalReadFast(LEFT);
-		bool right = digitalReadFast(RIGHT);
+		bool left = digitalReadFast(PIN_LIMIT_LEFT);
+		bool right = digitalReadFast(PIN_LIMIT_RIGHT);
 
 		char tab[10];
 		sprintf(tab, "L%dR%d", left, right);
