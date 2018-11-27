@@ -5,15 +5,16 @@
 
 #include "digitalWriteFast.h"
 #include <avr/wdt.h>
+#include <ctype.h>
 
 #define LED						13
 
-#define PIN_MOTOR_ENABLE		2
-#define PIN_MOTOR_DIRECTION		3
-#define PIN_MOTOR_PULSE			4
+#define PIN_MOTOR_ENABLE		4
+#define PIN_MOTOR_DIRECTION		5
+#define PIN_MOTOR_PULSE			6
 
-#define PIN_LIMIT_LEFT			7
-#define PIN_LIMIT_RIGHT			8
+#define PIN_LIMIT_LEFT			2
+#define PIN_LIMIT_RIGHT			3
 
 
 
@@ -50,9 +51,16 @@ struct {
   int step_delay;
 } task;
 
+volatile struct {
+	bool left;
+	bool right;
+	bool any;
+} limit = { 0 };
+
+char sprintf_buffer[100];
+
+
 // -- hardware stuff
-
-
 #if defined(Arduino_h)
 	bool __pulse_state = 0;
 
@@ -61,13 +69,11 @@ struct {
 		do {													\
 			if ((__x) == 1) {									\
 				position.direction = MotorDirection::Forward;	\
-				digitalWriteFast(PIN_MOTOR_DIRECTION, true)		\
-				digitalWriteFast(LED, true);					\
+				digitalWriteFast(PIN_MOTOR_DIRECTION, false);	\
 			}													\
 			else {												\
 				position.direction = MotorDirection::Backward;	\
-				digitalWriteFast(PIN_MOTOR_DIRECTION, false);	\
-				digitalWriteFast(LED, false);					\
+				digitalWriteFast(PIN_MOTOR_DIRECTION, true);	\
 			}													\
 		} while(0);
 			
@@ -171,17 +177,13 @@ void do_goto(long target)
 
 	task.topspeed_steps = abs(task.delta) - task.acc_steps - task.decc_steps;
 
-	char buffer[100];
-	sprintf(buffer, "current=%ld; target=%ld\n", position.current, task.target);
-	Serial.print(buffer);
+	//sprintf(sprintf_buffer, "current=%ld; target=%ld\n", position.current, task.target);
+	//Serial.print(sprintf_buffer);
 	
-	if (task.delta > 0) {
-		Serial.println("a");
-		MOTOR_SET_DIRECTION(1);
-	} else {
-		Serial.println("b");
+	if (task.delta > 0)
+		MOTOR_SET_DIRECTION(1)
+	else
 		MOTOR_SET_DIRECTION(-1);
-	}
 
 	do_accelerate();
 	do_move();
@@ -193,22 +195,43 @@ void do_goto(long target)
 
 void cmd_test_limit_switches(void)
 {
-	char buffer[] = {'\n', 'L', '-','R','-','\x0'}; // 2, 4
+	strcpy(sprintf_buffer, "\nL?R?"); // 2, 4
 	
 	while (Serial.available() == 0)
 	{
-		buffer[2] = '0' + !!digitalReadFast(PIN_LIMIT_LEFT);
-		buffer[4] = '0' + !!digitalReadFast(PIN_LIMIT_RIGHT);
+		sprintf_buffer[2] = '0' + !!digitalReadFast(PIN_LIMIT_LEFT);
+		sprintf_buffer[4] = '0' + !!digitalReadFast(PIN_LIMIT_RIGHT);
 		
-		Serial.print(buffer);
+		Serial.print(sprintf_buffer);
 	}
 	
 	while (Serial.available())
 		Serial.read();	
 }
 
+void show_position(void)
+{
+	Serial.print("position.current=");
+	Serial.println(position.current);
+}
+
+void isr_limit_left(void) {
+	//Serial.print("l");
+	limit.left = true;
+	limit.any = true;
+}
+
+void isr_limit_right(void) {
+	Serial.print("r");
+	limit.right = true;
+	limit.any = true;
+}
+
+
 void setup() {
 	wdt_disable();
+	noInterrupts();
+	
 	Serial.begin(9600);
 	pinModeFast(LED, OUTPUT);
 
@@ -222,12 +245,16 @@ void setup() {
 	digitalWriteFast(PIN_MOTOR_DIRECTION, false);
 	digitalWriteFast(PIN_MOTOR_PULSE, false);
 	
+	MOTOR_SET_DIRECTION(1);
+	MOTOR_ENABLE(false);
+
+
 	// setup inputs for limit switches
 	pinModeFast(PIN_LIMIT_LEFT, INPUT);
 	pinModeFast(PIN_LIMIT_RIGHT, INPUT);
-
-	MOTOR_SET_DIRECTION(1);
-	MOTOR_ENABLE(false);
+	
+	attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_LEFT), isr_limit_left, RISING);
+	attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_RIGHT), isr_limit_right, RISING);
 	
 
 	// basic motro parameters setup
@@ -262,17 +289,46 @@ void setup() {
 	
 	Serial.println();
 	Serial.println(F("================================================================================="));
-	Serial.println(F("# Stepper motor controller (motor 57HS22-A, driver HY-DIV-268N-5A               #"));
+	Serial.println(F("# Stepper motor controller (motor 57HS22-A, driver HY-DIV-268N-5A)              #"));
 	Serial.println(F("# v1.0 Tomasz Jaworski, 2018                                                    #"));
 	Serial.println(F("================================================================================="));
 	Serial.println(F("Commands should end only with the '\\n' character."));
-	Serial.println(F("ARDUINO IDE: Change 'No line ending' to 'Newline' in the bottom part of your console"));
+	Serial.println(F("ARDUINO IDE: Change 'No line ending' to 'Newline' at the bottom part of your console"));
+	Serial.println(F("INFO: Empty command repeats last one."));
+	
+	// engage interrupts
+	interrupts();
 }
 
+template <typename T>
+bool get_value(String& str, T& output) {
+	str.trim();
 
+	// is there anything interesting?
+	if (str.length() == 0)
+		return false;
+	if (!isdigit(str.charAt(0)) && str.charAt(0) != '-')
+		return false;
+	
+	char* endptr;
+	output = strtol(str.c_str(), &endptr, 10);
+	if (*endptr == '\0')
+	{
+		// There is no more to read; clear the input string
+		str = "";
+		return true;
+	}
+	if (isspace(*endptr))
+	{
+		// eat everything up until white-space
+		str.remove(0, endptr - str.c_str() + 1);
+		return true;
+	}
+
+	return false;
+}
 
 void loop() {
-
 
 	String s = "";
 	String old_command = "";
@@ -300,24 +356,26 @@ void loop() {
 		else
 			old_command = s;
 		
-		Serial.println(s);
+		Serial.println(s); // local echo
 
 		
 		if (s == "help")
 		{
 			Serial.println(F("Available commands:"));
-			Serial.println(F("  reset      - reset the controller"));
-			Serial.println(F("  switches   - test limit switches only"));
+			Serial.println(F("  reset       - reset the controller"));
+			Serial.println(F("  switches    - test limit switches only"));
 
-			Serial.println(F("  enable/en  - enables power output"));
-			Serial.println(F("  disable/di - disables power output"));
+			Serial.println(F("  enable/en   - enables power output"));
+			Serial.println(F("  disable/di  - disables power output"));
 
-			Serial.println(F("  forward/f  - set forward direction (incremental)"));
-			Serial.println(F("  backward/b - set backward direction (decremental)"));
-			Serial.println(F("  step/s     - make a step in set direction"));
+			Serial.println(F("  forward/f   - set forward direction (incremental)"));
+			Serial.println(F("  backward/b  - set backward direction (decremental)"));
+			Serial.println(F("  step/s      - make a step in set direction"));
 			
+			Serial.println(F("  position    - show current position"));
+			Serial.println(F("  go P        - go to position P"));
+			Serial.println(F("  sethome [P] - set home at position P (if given) or at current position (if not)"));
 			
-
 			continue;
 		}
 		
@@ -336,13 +394,13 @@ void loop() {
 		
 		if (s == "enable" || s == "en") {
 			MOTOR_ENABLE(true);
-			Serial.println("Power enabled");
+			Serial.println(F("Power enabled"));
 			continue;
 		}
 
 		if (s == "disable" || s == "di") {
 			MOTOR_ENABLE(false);
-			Serial.println("Power disabled");
+			Serial.println(F("Power disabled"));
 			continue;
 		}
 
@@ -361,6 +419,37 @@ void loop() {
 			continue;
 		}
 		
+		if (s.startsWith("go")) {
+			long position;
+			s.remove(0, 2);
+			if (!get_value<long>(s, position)) {
+				Serial.println(F("Command 'go': Expected distance in steps"));
+				continue;
+			}
+				
+			do_goto(position);
+			show_position();
+			continue;
+		}
+		
+		if (s.startsWith("sethome")) {
+			long new_home;
+			s.remove(0, 7);
+			if (!get_value<long>(s, new_home)) {
+				Serial.println(F("Command 'sethome': Expected distance in steps"));
+				continue;
+			}
+				
+			position.current -= new_home;
+			show_position();
+			continue;
+		}
+		
+		if (s == "position") {
+			show_position();
+			continue;
+		}
+
 		
 		Serial.print(F(" Command '"));
 		Serial.print(s);
