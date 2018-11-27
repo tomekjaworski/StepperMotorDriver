@@ -18,16 +18,21 @@
 #define min(__a, __b) ((__a) < (__b) ? (__a) : (__b))
 #define abs(__a) ((__a) < 0 ? -(__a) : (__a))
 
+enum class MotorDirection {
+	Forward,
+	Backward
+};
 
 struct {
   long current;
-  long target;	
-
   int delay;
+  MotorDirection direction;
 } position;
 
 struct {
-  long fullspeed_steps;
+  long target;	
+
+  long topspeed_steps;
   long delta;
 
   long acc_steps;
@@ -37,27 +42,35 @@ struct {
 } task;
 
 // -- hardware stuff
+
+
 #if defined(Arduino_h)
 
   bool __pulse_state = 0;
   #define DEBUG(...)
   #define MOTOR_SET_DIRECTION(__x)									\
 		do {														\
-			if ((__x) == 1)											\
+			if ((__x) == 1) {										\
+				position.direction = MotorDirection::Forward;		\
 				digitalWriteFast(PIN_MOTOR_DIRECTION, true)			\
-			else													\
+				digitalWriteFast(LED, true);						\
+			}														\
+			else {													\
+				position.direction = MotorDirection::Backward;		\
 				digitalWriteFast(PIN_MOTOR_DIRECTION, false);		\
+				digitalWriteFast(LED, false);						\
+			}														\
 		} while(0);
+			
+// -------------------------
 			
   #define MOTOR_PULSE												\
 		do {														\
 	  		if (__pulse_state = !__pulse_state)						\
 			{														\
 				digitalWriteFast(PIN_MOTOR_PULSE, true);			\
-				digitalWriteFast(LED, true);						\
 			} else {												\
 				digitalWriteFast(PIN_MOTOR_PULSE, false);			\
-				digitalWriteFast(LED, false);						\
 			}														\
 		} while (0);
 		
@@ -74,38 +87,54 @@ struct {
 
 void do_accelerate(void)
 {
-  for (int i = 0; i < task.acc_steps; i++)
-  {
-    DEBUG("ACC-F CP=%ld; delay=%d\n", position.current, position.delay);
-    
-    // move
-    MOTOR_PULSE;
-    position.delay -= task.step_delay;
-	delayMicroseconds(position.delay);
-  }
+	for (int i = 0; i < task.acc_steps; i++)
+	{
+		DEBUG("ACC-F CP=%ld; delay=%d\n", position.current, position.delay);
+
+		// move
+		MOTOR_PULSE;
+		position.delay -= task.step_delay;
+		delayMicroseconds(position.delay);
+	}
+  
+	if (position.direction == MotorDirection::Forward)
+		position.current += task.acc_steps;
+	else
+		position.current -= task.acc_steps;
 }
 
 void do_move(void)
 {
-  for (int i = 0; i < task.fullspeed_steps; i++) {
-    DEBUG("mov-F CP=%ld; delay=%d\n", position.current, position.delay);
+	for (int i = 0; i < task.topspeed_steps; i++) {
+		DEBUG("mov-F CP=%ld; delay=%d\n", position.current, position.delay);
 
-    // move
-    MOTOR_PULSE;
-	delayMicroseconds(position.delay);
-  }
+		// move
+		MOTOR_PULSE;
+		delayMicroseconds(position.delay);
+	}
+	
+	if (position.direction == MotorDirection::Forward)
+		position.current += task.topspeed_steps;
+	else
+		position.current -= task.topspeed_steps;
+
 }
 
 void do_deccelerate(void) 
 {
-  for (int i = 0; i < task.decc_steps; i++) {
-    DEBUG("DEC-F CP=%ld; delay=%d\n", position.current, position.delay);
-    
-    // move
-    MOTOR_PULSE;
-    position.delay += task.step_delay;
-	delayMicroseconds(position.delay);
-  }
+	for (int i = 0; i < task.decc_steps; i++) {
+		DEBUG("DEC-F CP=%ld; delay=%d\n", position.current, position.delay);
+
+		// move
+		MOTOR_PULSE;
+		position.delay += task.step_delay;
+		delayMicroseconds(position.delay);
+	}
+
+	if (position.direction == MotorDirection::Forward)
+		position.current += task.decc_steps;
+	else
+		position.current -= task.decc_steps;
 
 }
 
@@ -125,13 +154,10 @@ void setup() {
 	pinModeFast(RIGHT, INPUT);
 }
 
-long current_position = 0;
-long target_position = 1000;	
-
-int start_delay = 16000;
-int stop_delay = 1000;
-int step_delay = 2;
-int nsteps = (start_delay - stop_delay) / step_delay;
+//int start_delay = 16000;
+//int stop_delay = 1000;
+//int step_delay = 2;
+//int nsteps = (start_delay - stop_delay) / step_delay;
 
 
 struct {
@@ -143,9 +169,9 @@ struct {
 
 void do_goto(long target)
 {
-	position.target = target;
+	task.target = target;
 
-	task.delta = position.target - position.current;
+	task.delta = task.target - position.current;
 	task.acc_steps = min(abs(task.delta) / 2, config.n_delay_steps);
 	task.decc_steps = min(abs(task.delta) / 2, config.n_delay_steps);
 	task.step_delay = config.step_delay;
@@ -154,11 +180,17 @@ void do_goto(long target)
 	DEBUG("acceleration_steps=%ld\n", task.acc_steps);
 	DEBUG("decceleration_steps=%ld\n", task.decc_steps);
 
-	task.fullspeed_steps = abs(task.delta) - task.acc_steps - task.decc_steps;
+	task.topspeed_steps = abs(task.delta) - task.acc_steps - task.decc_steps;
 
+	char buffer[100];
+	sprintf(buffer, "current=%ld; target=%ld\n", position.current, task.target);
+	Serial.print(buffer);
+	
 	if (task.delta > 0) {
+		Serial.println("a");
 		MOTOR_SET_DIRECTION(1);
 	} else {
+		Serial.println("b");
 		MOTOR_SET_DIRECTION(-1);
 	}
 
@@ -212,14 +244,13 @@ void loop() {
 	while (1)
 	{
 
-		do_goto(500);
+		do_goto(10 * 200 * 4 * 2);
 		delay(100);
 
 //		do_goto(1500);
 //		do_goto(-1000);
 		do_goto(0);
-
-		delay(100);
+		delay(300);
 	}
 
 }
