@@ -55,6 +55,8 @@ volatile struct {
 	bool left;
 	bool right;
 	bool any;
+	
+	long max_position;
 } limit = { 0 };
 
 char sprintf_buffer[100];
@@ -222,7 +224,7 @@ void isr_limit_left(void) {
 }
 
 void isr_limit_right(void) {
-	Serial.print("r");
+	//Serial.print("r");
 	limit.right = true;
 	limit.any = true;
 }
@@ -298,6 +300,91 @@ void setup() {
 	
 	// engage interrupts
 	interrupts();
+	
+	do_goto(500);
+	
+	delay(100);
+	limit.any = limit.left = limit.right = false;
+	
+	int homing_speed = 3000;
+	int homing_speed2 = 25;
+	///////////////////////
+	
+	MOTOR_ENABLE(true);
+
+	// go for left limit switch
+	MOTOR_SET_DIRECTION(-1);
+	delay(10);
+	
+	while (true) {
+		if (limit.left)
+			break;
+		
+		delayMicroseconds(homing_speed);
+		MOTOR_PULSE;
+	}
+
+	// stabilize
+	delay(1000);
+	
+	// get of left limit switch
+	MOTOR_SET_DIRECTION(+1);
+	delay(10);
+	
+	while (true) {
+		if (!digitalReadFast(PIN_LIMIT_LEFT))
+			break;
+		
+		delay(homing_speed2);
+		MOTOR_PULSE;
+	}
+
+	// ---------------
+
+	// stabilize
+	delay(1000);
+	limit.any = limit.left = limit.right = false;
+	position.current = 0;
+
+	
+	///////////////////////
+	while (true) {
+		if (limit.right)
+			break;
+		
+		MOTOR_PULSE;
+		delayMicroseconds(homing_speed);
+		position.current++;
+	}
+	
+	// stabilize
+	delay(1000);
+	
+	// get of left limit switch
+	MOTOR_SET_DIRECTION(-1);
+	delay(10);
+
+	limit.max_position = 0;
+	while (true) {
+		if (!digitalReadFast(PIN_LIMIT_RIGHT))
+			break;
+		
+		MOTOR_PULSE;
+
+		delay(homing_speed2);
+		position.current--;
+	}	
+
+	limit.max_position = position.current;
+	
+	sprintf(sprintf_buffer, "HOME: max=%ld\n", limit.max_position);
+	Serial.print(sprintf_buffer);
+	
+	do_goto(limit.max_position / 2);
+	position.current = 0;
+	
+	while(1);
+	
 }
 
 template <typename T>
