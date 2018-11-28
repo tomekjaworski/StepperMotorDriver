@@ -30,13 +30,21 @@ struct {
 	int step_delay;
 	int n_delay_steps;
 	int divider;
+	
+	struct {
+		int speed;
+		int speed2;
+	} homing;
+	
+		
 } config;
 
 
 struct {
-  long current;
-  int delay;
-  MotorDirection direction;
+	long current;
+	int delay;
+	MotorDirection direction;
+	long maximum;
 } position;
 
 struct {
@@ -56,7 +64,6 @@ volatile struct {
 	bool right;
 	bool any;
 	
-	long max_position;
 } limit = { 0 };
 
 char sprintf_buffer[100];
@@ -195,6 +202,95 @@ void do_goto(long target)
 }
 
 
+
+void do_goto_home(void) {
+	limit.any = limit.left = limit.right = false;
+	
+	// STAGE 1
+	// Go for the left limit switch
+	MOTOR_SET_DIRECTION(-1);
+	delay(10);
+
+	while (true) {
+		// Did we hit it?
+		if (limit.left)
+			break;
+		
+		// Nope, make next step
+		delayMicroseconds(config.homing.speed);
+		MOTOR_PULSE;
+	}
+
+	// Stabilize the chassis
+	delay(1000);
+	
+	
+	// STAGE 2
+	// Get of the left limit switch.
+	// It can take a several steps since most limit switches have switching hysteresis.
+	MOTOR_SET_DIRECTION(+1);
+	delay(10);
+	
+	while (true) {
+		if (!digitalReadFast(PIN_LIMIT_LEFT))
+		{
+			delay(100);
+			if (!digitalReadFast(PIN_LIMIT_LEFT))
+				break;
+		}
+		
+		delay(config.homing.speed2);
+		MOTOR_PULSE;
+	}
+
+	// Stabilize the chassis, just to be sure
+	delay(1000);
+	limit.any = limit.left = limit.right = false;
+	position.current = 0;
+	
+}
+
+
+void do_find_right_limit(void) {
+	
+	limit.any = limit.left = limit.right = false;
+
+	// STAGE 1
+	// Go for the right limit switch
+	MOTOR_SET_DIRECTION(+1);
+	delay(10);	
+	
+	while (true) {
+		if (limit.right)
+			break;
+		
+		MOTOR_PULSE;
+		delayMicroseconds(config.homing.speed);
+		position.current++;
+	}
+	
+	// Stabilize
+	delay(1000);
+	
+	// STAGE 2
+	// Get of the right limit switch
+	MOTOR_SET_DIRECTION(-1);
+	delay(10);
+
+	while (true) {
+		if (!digitalReadFast(PIN_LIMIT_RIGHT))
+			break;
+		
+		MOTOR_PULSE;
+
+		delay(config.homing.speed2);
+		position.current--;
+	}	
+
+	position.maximum = position.current;
+}
+	
+
 void cmd_test_limit_switches(void)
 {
 	strcpy(sprintf_buffer, "\nL?R?"); // 2, 4
@@ -259,7 +355,7 @@ void setup() {
 	attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_RIGHT), isr_limit_right, RISING);
 	
 
-	// basic motro parameters setup
+	// basic motor parameters setup
 	config.start_delay = 1600;	// Interval [us] between steps at ZERO velocity
 	config.stop_delay = 250;	// Interval [us] between steps at TOP velocity
 	config.step_delay = 4;		// Acceleration/decceleration interval
@@ -274,6 +370,10 @@ void setup() {
 								// 16	=	1/16
 
 	config.n_delay_steps = (config.start_delay - config.stop_delay) / config.step_delay;
+	
+	config.homing.speed = 3000;
+	config.homing.speed2 = 25;
+
 
 	// initial conditions
 	position.current = 0;
@@ -300,91 +400,16 @@ void setup() {
 	
 	// engage interrupts
 	interrupts();
-	
-	do_goto(500);
-	
+/*
 	delay(100);
-	limit.any = limit.left = limit.right = false;
-	
-	int homing_speed = 3000;
-	int homing_speed2 = 25;
-	///////////////////////
-	
+
 	MOTOR_ENABLE(true);
-
-	// go for left limit switch
-	MOTOR_SET_DIRECTION(-1);
-	delay(10);
-	
-	while (true) {
-		if (limit.left)
-			break;
-		
-		delayMicroseconds(homing_speed);
-		MOTOR_PULSE;
-	}
-
-	// stabilize
-	delay(1000);
-	
-	// get of left limit switch
-	MOTOR_SET_DIRECTION(+1);
-	delay(10);
-	
-	while (true) {
-		if (!digitalReadFast(PIN_LIMIT_LEFT))
-			break;
-		
-		delay(homing_speed2);
-		MOTOR_PULSE;
-	}
-
-	// ---------------
-
-	// stabilize
-	delay(1000);
-	limit.any = limit.left = limit.right = false;
-	position.current = 0;
+	do_goto_home();
 
 	
-	///////////////////////
-	while (true) {
-		if (limit.right)
-			break;
-		
-		MOTOR_PULSE;
-		delayMicroseconds(homing_speed);
-		position.current++;
-	}
-	
-	// stabilize
-	delay(1000);
-	
-	// get of left limit switch
-	MOTOR_SET_DIRECTION(-1);
-	delay(10);
-
-	limit.max_position = 0;
-	while (true) {
-		if (!digitalReadFast(PIN_LIMIT_RIGHT))
-			break;
-		
-		MOTOR_PULSE;
-
-		delay(homing_speed2);
-		position.current--;
-	}	
-
-	limit.max_position = position.current;
-	
-	sprintf(sprintf_buffer, "HOME: max=%ld\n", limit.max_position);
-	Serial.print(sprintf_buffer);
-	
-	do_goto(limit.max_position / 2);
-	position.current = 0;
 	
 	while(1);
-	
+	*/
 }
 
 template <typename T>
@@ -462,6 +487,9 @@ void loop() {
 			Serial.println(F("  position    - show current position"));
 			Serial.println(F("  go P        - go to position P"));
 			Serial.println(F("  sethome [P] - set home at position P (if given) or at current position (if not)"));
+			Serial.println(F("  findhome    - home left until limit switch is found; then zero the position"));
+			Serial.println(F("  findmax     - find max position (most to the right)"));
+			
 			
 			continue;
 		}
@@ -537,6 +565,20 @@ void loop() {
 			continue;
 		}
 
+		if (s == "findhome") {
+			do_goto_home();
+			sprintf(sprintf_buffer, "position.current=%ld\n", position.current);
+			Serial.print(sprintf_buffer);
+			continue;
+		}
+		
+		if (s == "findmax") {
+			do_find_right_limit();
+			sprintf(sprintf_buffer, "position.max=%ld\n", position.maximum);
+			Serial.print(sprintf_buffer);
+			continue;
+		}
+		
 		
 		Serial.print(F(" Command '"));
 		Serial.print(s);
