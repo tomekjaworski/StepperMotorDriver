@@ -23,6 +23,10 @@ enum class MotorDirection {
 	Backward
 };
 
+enum class MotorPower {
+	Disabled,
+	Enabled
+};
 
 struct {
 	int start_delay;
@@ -41,10 +45,12 @@ struct {
 
 
 struct {
-	long current;
+	long current_position;
 	int delay;
+	
 	MotorDirection direction;
-} position;
+	MotorPower power;
+} state;
 
 struct {
   long target;	
@@ -82,11 +88,11 @@ char sprintf_buffer[100];
 	#define MOTOR_SET_DIRECTION(__x)							\
 		do {													\
 			if ((__x) == 1) {									\
-				position.direction = MotorDirection::Forward;	\
+				state.direction = MotorDirection::Forward;		\
 				digitalWriteFast(PIN_MOTOR_DIRECTION, false);	\
 			}													\
 			else {												\
-				position.direction = MotorDirection::Backward;	\
+				state.direction = MotorDirection::Backward;		\
 				digitalWriteFast(PIN_MOTOR_DIRECTION, true);	\
 			}													\
 		} while(0);
@@ -106,6 +112,7 @@ char sprintf_buffer[100];
 	#define MOTOR_ENABLE(__const_value)							\
 		do {													\
 			digitalWriteFast(PIN_MOTOR_ENABLE, !__const_value)	\
+			state.power = __const_value ? MotorPower::Enabled : MotorPower::Disabled; \
 		} while (0);											\
 
 		
@@ -114,64 +121,84 @@ char sprintf_buffer[100];
 	// test code
 	long __step = 0;
 	#define MOTOR_SET_DIRECTION(__x) do { __step = __x; } while(0)
-	#define MOTOR_PULSE position.current += __step;
+	#define MOTOR_PULSE state.current += __step;
 	#define MOTOR_ENABLE(__const_value)
 
 	#define DEBUG(...) printf(__VA_ARGS__)
 #endif
 
+bool ensure_motor_power(void) {
+	if (state.power != MotorPower::Enabled) {
+		Serial.println(F("Error: motor driver stage is not enabled"));
+		return false;
+	}
+	return true;
+}
 
+bool ensure_soft_limits(void) {
+	if (!limit.soft_limit_left_active) {
+		Serial.println(F("Error: unknown home position; use 'findhome' command"));
+		return false;
+	}
+
+	if (!limit.soft_limit_right_active) {
+		Serial.println(F("Error: unknown maximum position; use 'findmax' command"));
+		return false;
+	}
+	
+	return true;
+}
 
 void do_accelerate(void)
 {
 	for (int i = 0; i < task.acc_steps; i++)
 	{
-		DEBUG("ACC-F CP=%ld; delay=%d\n", position.current, position.delay);
+		DEBUG("ACC-F CP=%ld; delay=%d\n", state.current_position, state.delay);
 
 		// move
 		MOTOR_PULSE;
-		position.delay -= task.step_delay;
-		delayMicroseconds(position.delay);
+		state.delay -= task.step_delay;
+		delayMicroseconds(state.delay);
 	}
   
-	if (position.direction == MotorDirection::Forward)
-		position.current += task.acc_steps;
+	if (state.direction == MotorDirection::Forward)
+		state.current_position += task.acc_steps;
 	else
-		position.current -= task.acc_steps;
+		state.current_position -= task.acc_steps;
 }
 
 void do_move(void)
 {
 	for (int i = 0; i < task.topspeed_steps; i++) {
-		DEBUG("mov-F CP=%ld; delay=%d\n", position.current, position.delay);
+		DEBUG("mov-F CP=%ld; delay=%d\n", state.current_position, state.delay);
 
 		// move
 		MOTOR_PULSE;
-		delayMicroseconds(position.delay);
+		delayMicroseconds(state.delay);
 	}
 	
-	if (position.direction == MotorDirection::Forward)
-		position.current += task.topspeed_steps;
+	if (state.direction == MotorDirection::Forward)
+		state.current_position += task.topspeed_steps;
 	else
-		position.current -= task.topspeed_steps;
+		state.current_position -= task.topspeed_steps;
 
 }
 
 void do_deccelerate(void) 
 {
 	for (int i = 0; i < task.decc_steps; i++) {
-		DEBUG("DEC-F CP=%ld; delay=%d\n", position.current, position.delay);
+		DEBUG("DEC-F CP=%ld; delay=%d\n", state.current_position, state.delay);
 
 		// move
 		MOTOR_PULSE;
-		position.delay += task.step_delay;
-		delayMicroseconds(position.delay);
+		state.delay += task.step_delay;
+		delayMicroseconds(state.delay);
 	}
 
-	if (position.direction == MotorDirection::Forward)
-		position.current += task.decc_steps;
+	if (state.direction == MotorDirection::Forward)
+		state.current_position += task.decc_steps;
 	else
-		position.current -= task.decc_steps;
+		state.current_position -= task.decc_steps;
 
 }
 
@@ -185,7 +212,7 @@ void do_goto(long target)
 	
 	task.target = target;
 
-	task.delta = task.target - position.current;
+	task.delta = task.target - state.current_position;
 	task.acc_steps = min(abs(task.delta) / 2, config.n_delay_steps);
 	task.decc_steps = min(abs(task.delta) / 2, config.n_delay_steps);
 	task.step_delay = config.step_delay;
@@ -196,7 +223,7 @@ void do_goto(long target)
 
 	task.topspeed_steps = abs(task.delta) - task.acc_steps - task.decc_steps;
 
-	//sprintf(sprintf_buffer, "current=%ld; target=%ld\n", position.current, task.target);
+	//sprintf(sprintf_buffer, "current=%ld; target=%ld\n", state.current_position, task.target);
 	//Serial.print(sprintf_buffer);
 	
 	if (task.delta > 0)
@@ -208,12 +235,13 @@ void do_goto(long target)
 	do_move();
 	do_deccelerate();
 
-	DEBUG("FINAL STATE: position=%ld; delay=%d\n\n", position.current, position.delay);  
+	DEBUG("FINAL STATE: position=%ld; delay=%d\n\n", state.current_position, state.delay);  
 }
 
 
 
 void do_goto_home(void) {
+
 	limit.switch_any = limit.switch_left = limit.switch_right = false;
 	
 	// STAGE 1
@@ -257,7 +285,7 @@ void do_goto_home(void) {
 	delay(1000);
 	limit.switch_any = limit.switch_left = limit.switch_right = false;
 	
-	position.current = 0;
+	state.current_position = 0;
 
 	// set limiters
 	limit.soft_limit_left = 0;
@@ -266,7 +294,7 @@ void do_goto_home(void) {
 
 
 void do_find_right_limit(void) {
-	
+
 	limit.switch_any = limit.switch_left = limit.switch_right = false;
 
 	// STAGE 1
@@ -280,7 +308,7 @@ void do_find_right_limit(void) {
 		
 		MOTOR_PULSE;
 		delayMicroseconds(config.homing.speed);
-		position.current++;
+		state.current_position++;
 	}
 	
 	// Stabilize
@@ -298,18 +326,18 @@ void do_find_right_limit(void) {
 		MOTOR_PULSE;
 
 		delay(config.homing.speed2);
-		position.current--;
+		state.current_position--;
 	}	
 
 		// set limiters
-	limit.soft_limit_right = position.current;
+	limit.soft_limit_right = state.current_position;
 	limit.soft_limit_right_active = true;
 
 }
 	
 
-void cmd_test_limit_switches(void)
-{
+void cmd_test_limit_switches(void) {
+	
 	strcpy(sprintf_buffer, "\nL?R?"); // 2, 4
 	
 	while (Serial.available() == 0)
@@ -324,10 +352,49 @@ void cmd_test_limit_switches(void)
 		Serial.read();	
 }
 
+void cmd_sweep(void) {
+	if (!ensure_motor_power())
+		return;
+	if (!ensure_soft_limits())
+		return;
+
+	Serial.println("INFO: To quit sweeping type '++++++'...");
+	
+	int stage = 0;
+	int plus_counter = 0;
+	bool finish = false;
+	while (!finish) {
+		
+		if (stage % 2 == 0)
+			do_goto(0);
+		if (stage % 2 == 1)
+			do_goto(limit.soft_limit_right);
+		
+		stage++;
+		
+		while (Serial.available() && !finish) {
+			
+			byte b = Serial.read();
+			if (b == '+') {
+				plus_counter++;
+				if (plus_counter >= 6)
+					finish = true;
+			} else
+				plus_counter = 0;
+		}
+	}
+
+	// clean serial rx buffer
+	while (Serial.available())
+		Serial.read();	
+	
+	Serial.println(F("Done"));
+}
+
 void show_position(void)
 {
-	Serial.print("position.current=");
-	Serial.println(position.current);
+	Serial.print("state.current_position=");
+	Serial.println(state.current_position);
 }
 
 void isr_limit_left(void) {
@@ -393,8 +460,8 @@ void setup() {
 
 
 	// initial conditions
-	position.current = 0;
-	position.delay = config.start_delay;
+	state.current_position = 0;
+	state.delay = config.start_delay;
 	
 	// engage interrupts
 	interrupts();
@@ -505,6 +572,9 @@ void loop() {
 		
 		if (s == "reset") {
 			Serial.println("Resetting...");
+			
+			MOTOR_ENABLE(false);
+			
 			delay(1000);
 			wdt_enable(WDTO_15MS);
 			while(1);
@@ -538,11 +608,17 @@ void loop() {
 		}
 
 		if (s == "step" || s == "s") {
+			if (!ensure_motor_power())
+				continue;
+			
 			MOTOR_PULSE;
 			continue;
 		}
 		
 		if (s.startsWith("go")) {
+			if (!ensure_motor_power())
+				continue;
+			
 			long position;
 			s.remove(0, 2);
 			if (!get_value<long>(s, position)) {
@@ -563,7 +639,7 @@ void loop() {
 				continue;
 			}
 				
-			position.current -= new_home;
+			state.current_position -= new_home;
 			show_position();
 			continue;
 		}
@@ -574,16 +650,28 @@ void loop() {
 		}
 
 		if (s == "findhome") {
+			if (!ensure_motor_power())
+				continue;
+			
 			do_goto_home();
-			sprintf(sprintf_buffer, "position.current=%ld\n", position.current);
+			
+			sprintf(sprintf_buffer, "state.current_position=%ld\n", state.current_position);
 			Serial.print(sprintf_buffer);
 			continue;
 		}
 		
 		if (s == "findmax") {
+			if (!ensure_motor_power())
+				continue;
+
 			do_find_right_limit();
 			sprintf(sprintf_buffer, "position.max=%ld\n", limit.soft_limit_right);
 			Serial.print(sprintf_buffer);
+			continue;
+		}
+		
+		if (s == "sweep") {
+			cmd_sweep();
 			continue;
 		}
 		
