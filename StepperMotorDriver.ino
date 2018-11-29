@@ -398,18 +398,7 @@ void setup() {
 	Serial.println(F("ARDUINO IDE: Change 'No line ending' to 'Newline' at the bottom part of your console"));
 	Serial.println(F("INFO: Empty command repeats last one."));
 	
-	// engage interrupts
-	interrupts();
-/*
-	delay(100);
 
-	MOTOR_ENABLE(true);
-	do_goto_home();
-
-	
-	
-	while(1);
-	*/
 }
 
 template <typename T>
@@ -585,35 +574,4 @@ void loop() {
 		Serial.print(F("' unknown; Maybe 'help'?\n"));
 	}
 
-	
 
-	while(0)
-	{
-		bool left = digitalReadFast(PIN_LIMIT_LEFT);
-		bool right = digitalReadFast(PIN_LIMIT_RIGHT);
-
-		char tab[10];
-		sprintf(tab, "L%dR%d", left, right);
-		Serial.println(tab);
-	}
-
-
-	while(0) {
-		MOTOR_PULSE;
-		delayMicroseconds(200);
-	}
-
-	
-	while (1)
-	{
-
-		do_goto(10 * 200 * 4 * 2);
-		delay(100);
-
-//		do_goto(1500);
-//		do_goto(-1000);
-		do_goto(0);
-		delay(300);
-	}
-
-}
