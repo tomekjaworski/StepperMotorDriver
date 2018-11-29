@@ -44,7 +44,6 @@ struct {
 	long current;
 	int delay;
 	MotorDirection direction;
-	long maximum;
 } position;
 
 struct {
@@ -60,9 +59,15 @@ struct {
 } task;
 
 volatile struct {
-	bool left;
-	bool right;
-	bool any;
+	bool switch_left;
+	bool switch_right;
+	bool switch_any;
+	
+	bool soft_limit_left_active;
+	bool soft_limit_right_active;
+	long soft_limit_left;
+	long soft_limit_right;
+	
 	
 } limit = { 0 };
 
@@ -173,6 +178,11 @@ void do_deccelerate(void)
 
 void do_goto(long target)
 {
+	if (limit.soft_limit_left_active)
+		target = max(limit.soft_limit_left, target);
+	if (limit.soft_limit_right_active)
+		target = min(limit.soft_limit_right, target);
+	
 	task.target = target;
 
 	task.delta = task.target - position.current;
@@ -204,7 +214,7 @@ void do_goto(long target)
 
 
 void do_goto_home(void) {
-	limit.any = limit.left = limit.right = false;
+	limit.switch_any = limit.switch_left = limit.switch_right = false;
 	
 	// STAGE 1
 	// Go for the left limit switch
@@ -213,7 +223,7 @@ void do_goto_home(void) {
 
 	while (true) {
 		// Did we hit it?
-		if (limit.left)
+		if (limit.switch_left)
 			break;
 		
 		// Nope, make next step
@@ -245,15 +255,19 @@ void do_goto_home(void) {
 
 	// Stabilize the chassis, just to be sure
 	delay(1000);
-	limit.any = limit.left = limit.right = false;
-	position.current = 0;
+	limit.switch_any = limit.switch_left = limit.switch_right = false;
 	
+	position.current = 0;
+
+	// set limiters
+	limit.soft_limit_left = 0;
+	limit.soft_limit_left_active = true;
 }
 
 
 void do_find_right_limit(void) {
 	
-	limit.any = limit.left = limit.right = false;
+	limit.switch_any = limit.switch_left = limit.switch_right = false;
 
 	// STAGE 1
 	// Go for the right limit switch
@@ -261,7 +275,7 @@ void do_find_right_limit(void) {
 	delay(10);	
 	
 	while (true) {
-		if (limit.right)
+		if (limit.switch_right)
 			break;
 		
 		MOTOR_PULSE;
@@ -287,7 +301,10 @@ void do_find_right_limit(void) {
 		position.current--;
 	}	
 
-	position.maximum = position.current;
+		// set limiters
+	limit.soft_limit_right = position.current;
+	limit.soft_limit_right_active = true;
+
 }
 	
 
@@ -315,14 +332,14 @@ void show_position(void)
 
 void isr_limit_left(void) {
 	//Serial.print("l");
-	limit.left = true;
-	limit.any = true;
+	limit.switch_left = true;
+	limit.switch_any = true;
 }
 
 void isr_limit_right(void) {
 	//Serial.print("r");
-	limit.right = true;
-	limit.any = true;
+	limit.switch_right = true;
+	limit.switch_any = true;
 }
 
 
@@ -379,13 +396,15 @@ void setup() {
 	position.current = 0;
 	position.delay = config.start_delay;
 	
+	// engage interrupts
+	interrupts();
 	
 	
 	// I'm alive!
 	delay(1000);
 	for (int i = 0; i < 10; i++)
 	{
-		Serial.print((char)(43+2*(i&1)));
+		Serial.print((char)('+' + (i & 1) * 2));
 		delay(200);
 	}
 	
@@ -563,7 +582,7 @@ void loop() {
 		
 		if (s == "findmax") {
 			do_find_right_limit();
-			sprintf(sprintf_buffer, "position.max=%ld\n", position.maximum);
+			sprintf(sprintf_buffer, "position.max=%ld\n", limit.soft_limit_right);
 			Serial.print(sprintf_buffer);
 			continue;
 		}
@@ -573,5 +592,6 @@ void loop() {
 		Serial.print(s);
 		Serial.print(F("' unknown; Maybe 'help'?\n"));
 	}
+}
 
 
