@@ -7,6 +7,10 @@
 #include <avr/wdt.h>
 #include <ctype.h>
 
+
+#include <SPI.h>
+#include <Ethernet.h>
+
 #define LED						13
 
 #define PIN_MOTOR_ENABLE		4
@@ -127,9 +131,63 @@ char sprintf_buffer[100];
 	#define DEBUG(...) printf(__VA_ARGS__)
 #endif
 
+
+
+byte mac[] = {
+  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+IPAddress ip(212, 191, 89, 40);
+IPAddress myDns(8, 8, 8, 8);
+IPAddress gateway(212, 191, 89, 1);
+IPAddress subnet(255, 255, 255, 128);
+
+
+// telnet defaults to port 23
+EthernetServer server(23);
+EthernetClient client;
+
+
+
+void print(const char* str) {
+	Serial.print("> ");
+	client.print("> ");
+}
+
+void println(const char* str) {
+	Serial.println("> ");
+	client.println("> ");
+}
+
+void println(long int& value) {
+	Serial.println(value);
+	client.println(value);
+}
+
+void print(const String& str) {
+	Serial.print(str);
+	client.print(str);
+}
+
+void println(const String& str) {
+	Serial.println(str);
+	client.println(str);
+}
+
+void print(const __FlashStringHelper* str) {
+	Serial.print(str);
+	client.print(str);
+}
+
+void println(const __FlashStringHelper* str) {
+	Serial.println(str);
+	client.println(str);
+}
+
+
+
+
 bool ensure_motor_power(void) {
 	if (state.power != MotorPower::Enabled) {
-		Serial.println(F("Error: motor driver stage is not enabled"));
+		println(F("Error: motor driver stage is not enabled"));
 		return false;
 	}
 	return true;
@@ -137,12 +195,12 @@ bool ensure_motor_power(void) {
 
 bool ensure_soft_limits(void) {
 	if (!limit.soft_limit_left_active) {
-		Serial.println(F("Error: unknown home position; use 'findhome' command"));
+		println(F("Error: unknown home position; use 'findhome' command"));
 		return false;
 	}
 
 	if (!limit.soft_limit_right_active) {
-		Serial.println(F("Error: unknown maximum position; use 'findmax' command"));
+		println(F("Error: unknown maximum position; use 'findmax' command"));
 		return false;
 	}
 	
@@ -340,16 +398,20 @@ void cmd_test_limit_switches(void) {
 	
 	strcpy(sprintf_buffer, "\nL?R?"); // 2, 4
 	
-	while (Serial.available() == 0)
+	while (Serial.available() == 0 && client.available() == 0)
 	{
 		sprintf_buffer[2] = '0' + !!digitalReadFast(PIN_LIMIT_LEFT);
 		sprintf_buffer[4] = '0' + !!digitalReadFast(PIN_LIMIT_RIGHT);
 		
-		Serial.print(sprintf_buffer);
+		print(sprintf_buffer);
 	}
 	
-	while (Serial.available())
-		Serial.read();	
+	if (Serial.available())
+		while (Serial.available())
+			Serial.read();	
+	if (client.available())
+		while (client.available())
+			client.read();	
 }
 
 void cmd_sweep(void) {
@@ -358,7 +420,7 @@ void cmd_sweep(void) {
 	if (!ensure_soft_limits())
 		return;
 
-	Serial.println("INFO: To quit sweeping type '++++++'...");
+	println("INFO: To quit sweeping type '++++++'...");
 	
 	int stage = 0;
 	int plus_counter = 0;
@@ -372,9 +434,15 @@ void cmd_sweep(void) {
 		
 		stage++;
 		
-		while (Serial.available() && !finish) {
+		while ((Serial.available() || client.available()) && !finish) {
 			
-			byte b = Serial.read();
+			byte b;
+			if (Serial.available())
+				b = Serial.read();
+			else
+				if (client.available())
+					b = client.read();
+				
 			if (b == '+') {
 				plus_counter++;
 				if (plus_counter >= 6)
@@ -385,16 +453,19 @@ void cmd_sweep(void) {
 	}
 
 	// clean serial rx buffer
-	while (Serial.available())
-		Serial.read();	
-	
-	Serial.println(F("Done"));
+	if (Serial.available())
+		while (Serial.available())
+			Serial.read();	
+	if (client.available())
+		while (client.available())
+			client.read();		
+	println(F("Done"));
 }
 
 void show_position(void)
 {
-	Serial.print("state.current_position=");
-	Serial.println(state.current_position);
+	print("state.current_position=");
+	println(state.current_position);
 }
 
 void isr_limit_left(void) {
@@ -408,7 +479,6 @@ void isr_limit_right(void) {
 	limit.switch_right = true;
 	limit.switch_any = true;
 }
-
 
 void setup() {
 	wdt_disable();
@@ -468,18 +538,35 @@ void setup() {
 	
 	
 	// I'm alive!
-	delay(1000);
 	for (int i = 0; i < 10; i++)
 	{
 		Serial.print((char)('+' + (i & 1) * 2));
 		delay(200);
 	}
 	
+	
+	// initialize the ethernet device
+	Ethernet.begin(mac, ip, myDns, gateway, subnet);
+
+	
 	Serial.println();
 	Serial.println(F("================================================================================="));
 	Serial.println(F("# Stepper motor controller (motor 57HS22-A, driver HY-DIV-268N-5A)              #"));
 	Serial.println(F("# v1.0 Tomasz Jaworski, 2018                                                    #"));
 	Serial.println(F("================================================================================="));
+
+	if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+		Serial.println(F("Ethernet shield was not found. Aborting."));
+		while (true)
+			delay(10);
+	}
+	
+	// start listening for clients
+	server.begin();
+
+	Serial.print(F("Driver IP: "));
+	Serial.println(Ethernet.localIP());	
+	
 	Serial.println(F("Commands should end only with the '\\n' character."));
 	Serial.println(F("ARDUINO IDE: Change 'No line ending' to 'Newline' at the bottom part of your console"));
 	Serial.println(F("INFO: Empty command repeats last one."));
@@ -522,16 +609,51 @@ void loop() {
 	
 	while(1)
 	{
-		Serial.print("> ");
 		s = "";
+
+		print("> ");
 
 		while(true)
 		{
-			while(Serial.available() == 0);
-			int ch = Serial.read();
-			if (ch == '\n')
-				break;
-			s += (char)ch;
+			// if there is no data than check if there is a connection to be accepted
+			EthernetClient new_client = server.accept();
+	
+			if (new_client)
+			{
+				client.stop();
+				client = new_client;
+				Serial.print(F("New remote client: "));
+				Serial.print(client.remoteIP());
+				Serial.print(F(":"));
+				Serial.println(client.remotePort());
+			}
+			
+			if (client && !client.connected())
+			{
+				client.stop();
+				Serial.println(F("Remote connection closed"));
+			}
+		
+			// still no data?
+			if (Serial.available() == 0 && client.available() == 0)
+				continue; // wait some more
+			
+			if (Serial.available()) // Data on serial line?
+			{
+				int ch = Serial.read();
+				if (ch == '\n')
+					break;
+				s += (char)ch;
+			}
+			
+			if (client.available()) // Data from TCP client?
+			{
+				int ch = client.read();
+				if (ch == '\n')
+					break;
+				s += (char)ch;
+			}
+			
 		}
 		
 		s.trim();
@@ -543,27 +665,27 @@ void loop() {
 		else
 			old_command = s;
 		
-		Serial.println(s); // local echo
+		println(s); // local echo
 
 		
 		if (s == "help")
 		{
-			Serial.println(F("Available commands:"));
-			Serial.println(F("  reset       - reset the controller"));
-			Serial.println(F("  switches    - test limit switches only"));
-
-			Serial.println(F("  enable/en   - enables power output"));
-			Serial.println(F("  disable/di  - disables power output"));
-
-			Serial.println(F("  forward/f   - set forward direction (incremental)"));
-			Serial.println(F("  backward/b  - set backward direction (decremental)"));
-			Serial.println(F("  step/s      - make a step in set direction"));
+			println(F("Available commands:"));
+			println(F("  reset       - reset the controller"));
+			println(F("  switches    - test limit switches only"));
+            
+			println(F("  enable/en   - enables power output"));
+			println(F("  disable/di  - disables power output"));
+            
+			println(F("  forward/f   - set forward direction (incremental)"));
+			println(F("  backward/b  - set backward direction (decremental)"));
+			println(F("  step/s      - make a step in set direction"));
 			
-			Serial.println(F("  position    - show current position"));
-			Serial.println(F("  go P        - go to position P"));
-			Serial.println(F("  sethome [P] - set home at position P (if given) or at current position (if not)"));
-			Serial.println(F("  findhome    - home left until limit switch is found; then zero the position"));
-			Serial.println(F("  findmax     - find max position (most to the right)"));
+			println(F("  position    - show current position"));
+			println(F("  go P        - go to position P"));
+			println(F("  sethome [P] - set home at position P (if given) or at current position (if not)"));
+			println(F("  findhome    - home left until limit switch is found; then zero the position"));
+			println(F("  findmax     - find max position (most to the right)"));
 			
 			
 			continue;
@@ -571,7 +693,7 @@ void loop() {
 		
 		
 		if (s == "reset") {
-			Serial.println("Resetting...");
+			println(F("Resetting..."));
 			
 			MOTOR_ENABLE(false);
 			
@@ -587,13 +709,13 @@ void loop() {
 		
 		if (s == "enable" || s == "en") {
 			MOTOR_ENABLE(true);
-			Serial.println(F("Power enabled"));
+			println(F("Power enabled"));
 			continue;
 		}
 
 		if (s == "disable" || s == "di") {
 			MOTOR_ENABLE(false);
-			Serial.println(F("Power disabled"));
+			println(F("Power disabled"));
 			continue;
 		}
 
@@ -622,7 +744,7 @@ void loop() {
 			long position;
 			s.remove(0, 2);
 			if (!get_value<long>(s, position)) {
-				Serial.println(F("Command 'go': Expected distance in steps"));
+				println(F("Command 'go': Expected distance in steps"));
 				continue;
 			}
 				
@@ -635,7 +757,7 @@ void loop() {
 			long new_home;
 			s.remove(0, 7);
 			if (!get_value<long>(s, new_home)) {
-				Serial.println(F("Command 'sethome': Expected distance in steps"));
+				println(F("Command 'sethome': Expected distance in steps"));
 				continue;
 			}
 				
@@ -656,7 +778,7 @@ void loop() {
 			do_goto_home();
 			
 			sprintf(sprintf_buffer, "state.current_position=%ld\n", state.current_position);
-			Serial.print(sprintf_buffer);
+			print(sprintf_buffer);
 			continue;
 		}
 		
@@ -666,7 +788,7 @@ void loop() {
 
 			do_find_right_limit();
 			sprintf(sprintf_buffer, "position.max=%ld\n", limit.soft_limit_right);
-			Serial.print(sprintf_buffer);
+			print(sprintf_buffer);
 			continue;
 		}
 		
@@ -676,9 +798,9 @@ void loop() {
 		}
 		
 		
-		Serial.print(F(" Command '"));
-		Serial.print(s);
-		Serial.print(F("' unknown; Maybe 'help'?\n"));
+		print(F(" Command '"));
+		print(s);
+		print(F("' unknown; Maybe 'help'?\n"));
 	}
 }
 
