@@ -131,17 +131,7 @@ char sprintf_buffer[100];
 	#define DEBUG(...) printf(__VA_ARGS__)
 #endif
 
-
-
-byte mac[] = {
-  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress ip(212, 191, 89, 40);
-IPAddress myDns(8, 8, 8, 8);
-IPAddress gateway(212, 191, 89, 1);
-IPAddress subnet(255, 255, 255, 128);
-
-
-// telnet defaults to port 23
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 EthernetServer server(23);
 EthernetClient client;
 
@@ -555,17 +545,31 @@ void setup() {
 	Serial.println(F("# v1.0 Tomasz Jaworski, 2018                                                    #"));
 	Serial.println(F("================================================================================="));
 
+	Serial.print(F("DHCP: Hardware address: "));
+	for (byte octet = 0; octet < 6; octet++) {
+		Serial.print(mac[octet], HEX);
+		Serial.print((octet < 5) ? '-' : '\n');
+	}
+	
+	// Talk to a DHCP server
+	if (Ethernet.begin(mac)) {
+		Serial.print(F("DHCP: device ip = "));
+		Serial.println(Ethernet.localIP());	
+	} else
+		Serial.println(F("DHCP: Unable to acquire an IP address"));
+
+
+	// Hardware error?
 	if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-		Serial.println(F("Ethernet shield was not found. Aborting."));
+		Serial.println(F("ETHERNET: shield was not found. Aborted."));
 		while (true)
 			delay(10);
 	}
+
+
 	
 	// start listening for clients
 	server.begin();
-
-	Serial.print(F("Driver IP: "));
-	Serial.println(Ethernet.localIP());	
 	
 	Serial.println(F("Commands should end only with the '\\n' character."));
 	Serial.println(F("ARDUINO IDE: Change 'No line ending' to 'Newline' at the bottom part of your console"));
@@ -626,6 +630,8 @@ void loop() {
 				Serial.print(client.remoteIP());
 				Serial.print(F(":"));
 				Serial.println(client.remotePort());
+				
+				client.println("Connected.");
 			}
 			
 			if (client && !client.connected())
