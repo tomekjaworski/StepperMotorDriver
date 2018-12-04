@@ -3,6 +3,8 @@ A stepper motor driver for Arduino Uno.
 
 It uses a simple command line interface available via both Serial line (USB) and Ethernet (TCP, port 23, simple text console).
 
+<img src="https://github.com/tomekjaworski/StepperMotorDriver/blob/master/img/ardu_console.png" width="512px">
+
 #### Used devices:
 * Arduino Uno
 * Stepper motor driver: HY-DIV-268N-5A
