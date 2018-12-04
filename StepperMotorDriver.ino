@@ -135,49 +135,66 @@ byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 EthernetServer server(23);
 EthernetClient client;
 
-
-
-void print(const char* str) {
-	Serial.print("> ");
-	client.print("> ");
+void comm_print(const char* str) {
+	Serial.print(str);
+	client.print(str);
 }
 
-void println(const char* str) {
-	Serial.println("> ");
-	client.println("> ");
+void comm_println(const char* str) {
+	Serial.println(str);
+	client.println(str);
 }
 
-void println(long int& value) {
+void comm_println(long int& value) {
 	Serial.println(value);
 	client.println(value);
 }
 
-void print(const String& str) {
+void comm_print(const String& str) {
 	Serial.print(str);
 	client.print(str);
 }
 
-void println(const String& str) {
+void comm_println(const String& str) {
 	Serial.println(str);
 	client.println(str);
 }
 
-void print(const __FlashStringHelper* str) {
+void comm_print(const __FlashStringHelper* str) {
 	Serial.print(str);
 	client.print(str);
 }
 
-void println(const __FlashStringHelper* str) {
+void comm_println(const __FlashStringHelper* str) {
 	Serial.println(str);
 	client.println(str);
 }
 
+bool comm_available(void) {
+	return Serial.available() != 0 || client.available() != 0;
+}
 
+void comm_purge_rx(void) {
+	if (Serial.available())
+		while (Serial.available())
+			Serial.read();	
+	if (client.available())
+		while (client.available())
+			client.read();		
+}
 
+int comm_read(void) {
+	if (Serial.available())
+		return Serial.read();
+	else
+		if (client.available())
+			return client.read();
+	return -1; // no data
+}
 
 bool ensure_motor_power(void) {
 	if (state.power != MotorPower::Enabled) {
-		println(F("Error: motor driver stage is not enabled"));
+		comm_println(F("Error: motor driver stage is not enabled"));
 		return false;
 	}
 	return true;
@@ -185,12 +202,12 @@ bool ensure_motor_power(void) {
 
 bool ensure_soft_limits(void) {
 	if (!limit.soft_limit_left_active) {
-		println(F("Error: unknown home position; use 'findhome' command"));
+		comm_println(F("Error: unknown home position; use 'findhome' command"));
 		return false;
 	}
 
 	if (!limit.soft_limit_right_active) {
-		println(F("Error: unknown maximum position; use 'findmax' command"));
+		comm_println(F("Error: unknown maximum position; use 'findmax' command"));
 		return false;
 	}
 	
@@ -386,22 +403,17 @@ void do_find_right_limit(void) {
 
 void cmd_test_limit_switches(void) {
 	
-	strcpy(sprintf_buffer, "\nL?R?"); // 2, 4
+	strcpy(sprintf_buffer, "L?R?"); // 2, 4
 	
-	while (Serial.available() == 0 && client.available() == 0)
+	while (!comm_available())
 	{
-		sprintf_buffer[2] = '0' + !!digitalReadFast(PIN_LIMIT_LEFT);
-		sprintf_buffer[4] = '0' + !!digitalReadFast(PIN_LIMIT_RIGHT);
+		sprintf_buffer[1] = '0' + !!digitalReadFast(PIN_LIMIT_LEFT);
+		sprintf_buffer[3] = '0' + !!digitalReadFast(PIN_LIMIT_RIGHT);
 		
-		print(sprintf_buffer);
+		comm_println(sprintf_buffer);
 	}
 	
-	if (Serial.available())
-		while (Serial.available())
-			Serial.read();	
-	if (client.available())
-		while (client.available())
-			client.read();	
+	comm_purge_rx();
 }
 
 void cmd_sweep(void) {
@@ -410,7 +422,7 @@ void cmd_sweep(void) {
 	if (!ensure_soft_limits())
 		return;
 
-	println("INFO: To quit sweeping type '++++++'...");
+	comm_println("INFO: To quit sweeping type '++++++'...");
 	
 	int stage = 0;
 	int plus_counter = 0;
@@ -424,15 +436,8 @@ void cmd_sweep(void) {
 		
 		stage++;
 		
-		while ((Serial.available() || client.available()) && !finish) {
-			
-			byte b;
-			if (Serial.available())
-				b = Serial.read();
-			else
-				if (client.available())
-					b = client.read();
-				
+		while (comm_available() && !finish) {
+			byte b = comm_read();
 			if (b == '+') {
 				plus_counter++;
 				if (plus_counter >= 6)
@@ -443,19 +448,14 @@ void cmd_sweep(void) {
 	}
 
 	// clean serial rx buffer
-	if (Serial.available())
-		while (Serial.available())
-			Serial.read();	
-	if (client.available())
-		while (client.available())
-			client.read();		
-	println(F("Done"));
+	comm_purge_rx();
+	comm_println(F("Done"));
 }
 
 void show_position(void)
 {
-	print("state.current_position=");
-	println(state.current_position);
+	comm_print("state.current_position=");
+	comm_println(state.current_position);
 }
 
 void isr_limit_left(void) {
@@ -535,10 +535,6 @@ void setup() {
 	}
 	
 	
-	// initialize the ethernet device
-	Ethernet.begin(mac, ip, myDns, gateway, subnet);
-
-	
 	Serial.println();
 	Serial.println(F("================================================================================="));
 	Serial.println(F("# Stepper motor controller (motor 57HS22-A, driver HY-DIV-268N-5A)              #"));
@@ -615,7 +611,7 @@ void loop() {
 	{
 		s = "";
 
-		print("> ");
+		comm_print("> ");
 
 		while(true)
 		{
@@ -644,22 +640,14 @@ void loop() {
 			if (Serial.available() == 0 && client.available() == 0)
 				continue; // wait some more
 			
-			if (Serial.available()) // Data on serial line?
+			if (comm_available()) // dava available?
 			{
-				int ch = Serial.read();
+				int ch = comm_read();
 				if (ch == '\n')
 					break;
 				s += (char)ch;
 			}
-			
-			if (client.available()) // Data from TCP client?
-			{
-				int ch = client.read();
-				if (ch == '\n')
-					break;
-				s += (char)ch;
-			}
-			
+		
 		}
 		
 		s.trim();
@@ -671,27 +659,27 @@ void loop() {
 		else
 			old_command = s;
 		
-		println(s); // local echo
+		comm_println(s); // local echo
 
 		
 		if (s == "help")
 		{
-			println(F("Available commands:"));
-			println(F("  reset       - reset the controller"));
-			println(F("  switches    - test limit switches only"));
+			comm_println(F("Available commands:"));
+			comm_println(F("  reset       - reset the controller"));
+			comm_println(F("  switches    - test limit switches only"));
             
-			println(F("  enable/en   - enables power output"));
-			println(F("  disable/di  - disables power output"));
+			comm_println(F("  enable/en   - enables power output"));
+			comm_println(F("  disable/di  - disables power output"));
             
-			println(F("  forward/f   - set forward direction (incremental)"));
-			println(F("  backward/b  - set backward direction (decremental)"));
-			println(F("  step/s      - make a step in set direction"));
+			comm_println(F("  forward/f   - set forward direction (incremental)"));
+			comm_println(F("  backward/b  - set backward direction (decremental)"));
+			comm_println(F("  step/s      - make a step in set direction"));
 			
-			println(F("  position    - show current position"));
-			println(F("  go P        - go to position P"));
-			println(F("  sethome [P] - set home at position P (if given) or at current position (if not)"));
-			println(F("  findhome    - home left until limit switch is found; then zero the position"));
-			println(F("  findmax     - find max position (most to the right)"));
+			comm_println(F("  position    - show current position"));
+			comm_println(F("  go P        - go to position P"));
+			comm_println(F("  sethome [P] - set home at position P (if given) or at current position (if not)"));
+			comm_println(F("  findhome    - home left until limit switch is found; then zero the position"));
+			comm_println(F("  findmax     - find max position (most to the right)"));
 			
 			
 			continue;
@@ -699,7 +687,7 @@ void loop() {
 		
 		
 		if (s == "reset") {
-			println(F("Resetting..."));
+			comm_println(F("Resetting..."));
 			
 			MOTOR_ENABLE(false);
 			
@@ -715,13 +703,13 @@ void loop() {
 		
 		if (s == "enable" || s == "en") {
 			MOTOR_ENABLE(true);
-			println(F("Power enabled"));
+			comm_println(F("Power enabled"));
 			continue;
 		}
 
 		if (s == "disable" || s == "di") {
 			MOTOR_ENABLE(false);
-			println(F("Power disabled"));
+			comm_println(F("Power disabled"));
 			continue;
 		}
 
@@ -750,7 +738,7 @@ void loop() {
 			long position;
 			s.remove(0, 2);
 			if (!get_value<long>(s, position)) {
-				println(F("Command 'go': Expected distance in steps"));
+				comm_println(F("Command 'go': Expected distance in steps"));
 				continue;
 			}
 				
@@ -763,7 +751,7 @@ void loop() {
 			long new_home;
 			s.remove(0, 7);
 			if (!get_value<long>(s, new_home)) {
-				println(F("Command 'sethome': Expected distance in steps"));
+				comm_println(F("Command 'sethome': Expected distance in steps"));
 				continue;
 			}
 				
@@ -783,8 +771,8 @@ void loop() {
 			
 			do_goto_home();
 			
-			sprintf(sprintf_buffer, "state.current_position=%ld\n", state.current_position);
-			print(sprintf_buffer);
+			sprintf(sprintf_buffer, "state.current_position=%ld", state.current_position);
+			comm_println(sprintf_buffer);
 			continue;
 		}
 		
@@ -793,8 +781,8 @@ void loop() {
 				continue;
 
 			do_find_right_limit();
-			sprintf(sprintf_buffer, "position.max=%ld\n", limit.soft_limit_right);
-			print(sprintf_buffer);
+			sprintf(sprintf_buffer, "position.max=%ld", limit.soft_limit_right);
+			comm_println(sprintf_buffer);
 			continue;
 		}
 		
@@ -804,9 +792,9 @@ void loop() {
 		}
 		
 		
-		print(F(" Command '"));
-		print(s);
-		print(F("' unknown; Maybe 'help'?\n"));
+		comm_print(F(" Command '"));
+		comm_print(s);
+		comm_println(F("' unknown; Maybe 'help'?"));
 	}
 }
 
