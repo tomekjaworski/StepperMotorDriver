@@ -500,9 +500,9 @@ void setup() {
 	
 
 	// basic motor parameters setup
-	config.start_delay = 1600;	// Interval [us] between steps at ZERO velocity
-	config.stop_delay = 250;	// Interval [us] between steps at TOP velocity
-	config.step_delay = 4;		// Acceleration/decceleration interval
+	config.start_delay = 6000;	// Interval [us] between steps at ZERO velocity
+	config.stop_delay = 1500;	// Interval [us] between steps at TOP velocity
+	config.step_delay = 24;		// Acceleration/decceleration interval
 								// Amount of time [us] that is added or subtracted from common step interval during ramp execution
 								// This parameter can be also interpreted as the slope of the velocity ramp
 	
@@ -546,6 +546,7 @@ void setup() {
 		Serial.print(mac[octet], HEX);
 		Serial.print((octet < 5) ? '-' : '\n');
 	}
+	
 	
 	// Talk to a DHCP server
 	if (Ethernet.begin(mac)) {
