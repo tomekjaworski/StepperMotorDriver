@@ -585,7 +585,7 @@ void setup() {
 		Serial.print((octet < 5) ? '-' : '\n');
 	}
 	
-	
+	/*
 	// Talk to a DHCP server
 	if (Ethernet.begin(mac)) {
 		Serial.print(F("DHCP: device ip = "));
@@ -600,7 +600,7 @@ void setup() {
 		while (true)
 			delay(10);
 	}
-
+*/
 
 	
 	// start listening for clients
