@@ -452,6 +452,44 @@ void cmd_sweep(void) {
 	comm_println(F("Done"));
 }
 
+
+
+void cmd_sweep2(int posmin, int posmax) {
+  if (!ensure_motor_power())
+    return;
+ // if (!ensure_soft_limits())
+  //  return;
+
+  comm_println("INFO: To quit sweeping type '++++++'...");
+  
+  int stage = 0;
+  int plus_counter = 0;
+  bool finish = false;
+  while (!finish) {
+    
+    if (stage % 2 == 0)
+      do_goto(posmin);
+    if (stage % 2 == 1)
+      do_goto(posmax);
+    
+    stage++;
+    
+    while (comm_available() && !finish) {
+      byte b = comm_read();
+      if (b == '+') {
+        plus_counter++;
+        if (plus_counter >= 6)
+          finish = true;
+      } else
+        plus_counter = 0;
+    }
+  }
+
+  // clean serial rx buffer
+  comm_purge_rx();
+  comm_println(F("Done"));
+}
+
 void show_position(void)
 {
 	comm_print("state.current_position=");
@@ -788,7 +826,8 @@ void loop() {
 		}
 		
 		if (s == "sweep") {
-			cmd_sweep();
+			//cmd_sweep();
+      cmd_sweep2(-2000, 2000);
 			continue;
 		}
 		
@@ -798,5 +837,3 @@ void loop() {
 		comm_println(F("' unknown; Maybe 'help'?"));
 	}
 }
-
-
